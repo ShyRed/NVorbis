@@ -3,21 +3,26 @@
   <PropertyGroup>
     <TargetFrameworks>netstandard2.0;net45</TargetFrameworks>
     <RootNamespace>NVorbis</RootNamespace>
-    <Description>A fully managed implementation of a Xiph.org Foundation Ogg Vorbis decoder.</Description>
+    <!-- A fork of NVorbis 0.10.5 under its own package ID; the assembly name and namespace stay NVorbis. -->
+    <PackageId>ShyRed.NVorbis</PackageId>
+    <Description>A fully managed implementation of a Xiph.org Foundation Ogg Vorbis decoder. Fork of NVorbis 0.10.5 (https://github.com/NVorbis/NVorbis) that decodes and seeks without allocating, with fixes for seeking inside the first and last pages.</Description>
     <Company>Andrew Ward</Company>
     <Copyright>Copyright © Andrew Ward 2021</Copyright>
     <AssemblyVersion>0.10.5.0</AssemblyVersion>
-    <FileVersion>0.10.5.0</FileVersion>
-    <Authors>Andrew Ward</Authors>
-    <Version>0.10.5</Version>
+    <FileVersion>0.10.5.1</FileVersion>
+    <Authors>Andrew Ward; fork by ShyRed</Authors>
+    <Version>0.10.5-nogc.1</Version>
     <PackageLicenseUrl></PackageLicenseUrl>
-    <PackageProjectUrl>https://github.com/NVorbis/NVorbis</PackageProjectUrl>
-    <PackageReleaseNotes>- Fix seeking issues, properly this time</PackageReleaseNotes>
+    <PackageProjectUrl>https://github.com/ShyRed/NVorbis</PackageProjectUrl>
+    <PackageReleaseNotes>- No allocations per packet, page or seek once a stream is warm
+- Exact seeks inside the first audio page (was 128 frames early; frames 1 to 128 never returned)
+- Seeking before the first audio page has been read no longer throws
+- Seeking into a last page with a clipped granule position no longer throws, and trims the end correctly</PackageReleaseNotes>
     <PackageTags>ogg vorbis xiph audio c# sound .NET</PackageTags>
     <NeutralLanguage>en</NeutralLanguage>
     <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
     <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-    <RepositoryUrl>https://github.com/NVorbis/NVorbis</RepositoryUrl>
+    <RepositoryUrl>https://github.com/ShyRed/NVorbis</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
