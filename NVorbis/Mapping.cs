@@ -13,6 +13,10 @@ namespace NVorbis
         IFloor[] _channelFloor;
         IResidue[] _channelResidue;
 
+        // per-packet scratch, reused so decoding doesn't allocate
+        IFloorData[] _floorData;
+        bool[] _noExecuteChannel;
+
         public void Init(IPacket packet, int channels, IFloor[] floors, IResidue[] residues, IMdct mdct)
         {
             var submapCount = 1;
@@ -89,6 +93,9 @@ namespace NVorbis
                 _channelResidue[c] = _submapResidue[mux[c]];
             }
 
+            _floorData = new IFloorData[channels];
+            _noExecuteChannel = new bool[channels];
+
             _mdct = mdct;
         }
 
@@ -97,8 +104,8 @@ namespace NVorbis
             var halfBlockSize = blockSize >> 1;
 
             // read the noise floor data
-            var floorData = new IFloorData[_channelFloor.Length];
-            var noExecuteChannel = new bool[_channelFloor.Length];
+            var floorData = _floorData;
+            var noExecuteChannel = _noExecuteChannel;
             for (var i = 0; i < _channelFloor.Length; i++)
             {
                 floorData[i] = _channelFloor[i].Unpack(packet, blockSize, i);

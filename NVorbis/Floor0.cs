@@ -25,6 +25,9 @@ namespace NVorbis
         Dictionary<int, float[]> _wMap;
         Dictionary<int, int[]> _barkMaps;
 
+        // per-channel packet data, reused so decoding doesn't allocate
+        Data[] _channelData;
+
         public void Init(IPacket packet, int channels, int block0Size, int block1Size, ICodebook[] codebooks)
         {
             // this is pretty well stolen directly from libvorbis...  BSD license
@@ -62,6 +65,12 @@ namespace NVorbis
                 [block0Size] = SynthesizeWDelMap(block0Size / 2),
                 [block1Size] = SynthesizeWDelMap(block1Size / 2)
             };
+
+            _channelData = new Data[channels];
+            for (var i = 0; i < channels; i++)
+            {
+                _channelData[i] = new Data { Coeff = new float[_order + 1] };
+            }
         }
 
         int[] SynthesizeBarkCurve(int n)
@@ -97,10 +106,12 @@ namespace NVorbis
 
         public IFloorData Unpack(IPacket packet, int blockSize, int channel)
         {
-            var data = new Data
-            {
-                Coeff = new float[_order + 1],
-            };
+            // reuse this channel's instance; reset it to the state of a new one
+            // (Coeff is only read when Amp > 0, and is cleared below in that case)
+            var data = _channelData[channel];
+            data.Amp = 0f;
+            data.ForceEnergy = false;
+            data.ForceNoEnergy = false;
 
             data.Amp = packet.ReadBits(_ampBits);
             if (data.Amp > 0f)

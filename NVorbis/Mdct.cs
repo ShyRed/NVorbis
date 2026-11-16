@@ -10,14 +10,24 @@ namespace NVorbis
 
         Dictionary<int, MdctImpl> _setupCache = new Dictionary<int, MdctImpl>();
 
+        public void Setup(int sampleCount)
+        {
+            GetImpl(sampleCount);
+        }
+
         public void Reverse(float[] samples, int sampleCount)
+        {
+            GetImpl(sampleCount).CalcReverse(samples);
+        }
+
+        private MdctImpl GetImpl(int sampleCount)
         {
             if (!_setupCache.TryGetValue(sampleCount, out var impl))
             {
                 impl = new MdctImpl(sampleCount);
                 _setupCache[sampleCount] = impl;
             }
-            impl.CalcReverse(samples);
+            return impl;
         }
 
         class MdctImpl
@@ -26,6 +36,9 @@ namespace NVorbis
 
             readonly float[] _a, _b, _c;
             readonly ushort[] _bitrev;
+
+            // scratch buffer for CalcReverse; step 0 overwrites all of it, so it never needs clearing
+            readonly float[] _buf2;
 
             public MdctImpl(int n)
             {
@@ -60,13 +73,15 @@ namespace NVorbis
                 {
                     _bitrev[i] = (ushort)(Utils.BitReverse((uint)i, _ld - 3) << 2);
                 }
+
+                _buf2 = new float[_n2];
             }
 
             internal void CalcReverse(float[] buffer)
             {
                 float[] u, v;
 
-                var buf2 = new float[_n2];
+                var buf2 = _buf2;
 
                 // copy and reflect spectral data
                 // step 0

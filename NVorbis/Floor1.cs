@@ -24,11 +24,22 @@ namespace NVorbis
         ICodebook[][] _subclassBooks;
         int[][] _subclassBookIndex;
 
+        // per-channel packet data and Apply() scratch, reused so decoding doesn't allocate
+        Data[] _channelData;
+        readonly bool[] _stepFlags = new bool[64];
+        readonly int[] _finalY = new int[64];
+
         static readonly int[] _rangeLookup = { 256, 128, 86, 64 };
         static readonly int[] _yBitsLookup = { 8, 7, 7, 6 };
 
         public void Init(IPacket packet, int channels, int block0Size, int block1Size, ICodebook[] codebooks)
         {
+            _channelData = new Data[channels];
+            for (var i = 0; i < channels; i++)
+            {
+                _channelData[i] = new Data();
+            }
+
             var maximum_class = -1;
             _partitionClass = new int[(int)packet.ReadBits(5)];
             for (int i = 0; i < _partitionClass.Length; i++)
@@ -134,7 +145,12 @@ namespace NVorbis
 
         public IFloorData Unpack(IPacket packet, int blockSize, int channel)
         {
-            var data = new Data();
+            // reuse this channel's instance; reset it to the state of a new one
+            var data = _channelData[channel];
+            Array.Clear(data.Posts, 0, data.Posts.Length);
+            data.PostCount = 0;
+            data.ForceEnergy = false;
+            data.ForceNoEnergy = false;
 
             // hoist ReadPosts to here since that's all we're doing...
             if (packet.ReadBit())
@@ -223,11 +239,13 @@ namespace NVorbis
 
         bool[] UnwrapPosts(Data data)
         {
-            var stepFlags = new bool[64];
+            var stepFlags = _stepFlags;
+            Array.Clear(stepFlags, 0, stepFlags.Length);
             stepFlags[0] = true;
             stepFlags[1] = true;
 
-            var finalY = new int[64];
+            var finalY = _finalY;
+            Array.Clear(finalY, 0, finalY.Length);
             finalY[0] = data.Posts[0];
             finalY[1] = data.Posts[1];
 

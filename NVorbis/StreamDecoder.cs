@@ -34,6 +34,13 @@ namespace NVorbis
 
         private float[][] _nextPacketBuf;
         private float[][] _prevPacketBuf;
+
+        // the two packet buffers; allocated once and handed out by GetFreePacketBuffer() so seeks and EOS don't cause reallocation
+        private float[][] _packetBufA;
+        private float[][] _packetBufB;
+
+        // cached so SeekTo(...) doesn't allocate a delegate per call
+        private readonly GetPacketGranuleCount _getPacketGranules;
         private int _prevPacketStart;
         private int _prevPacketEnd;
         private int _prevPacketStop;
@@ -53,6 +60,7 @@ namespace NVorbis
             _factory = factory ?? throw new ArgumentNullException(nameof(factory));
 
             _stats = new StreamStats();
+            _getPacketGranules = GetPacketGranules;
 
             _currentPosition = 0L;
             ClipSamples = true;
@@ -121,9 +129,28 @@ namespace NVorbis
                 return false;
             }
 
+            _packetBufA = CreatePacketBuffer();
+            _packetBufB = CreatePacketBuffer();
+
             _currentPosition = 0;
             ResetDecoder();
             return true;
+        }
+
+        private float[][] CreatePacketBuffer()
+        {
+            var buf = new float[_channels][];
+            for (var i = 0; i < _channels; i++)
+            {
+                buf[i] = new float[_block1Size];
+            }
+            return buf;
+        }
+
+        private float[][] GetFreePacketBuffer()
+        {
+            // whichever buffer isn't holding the previous packet's data
+            return ReferenceEquals(_prevPacketBuf, _packetBufA) ? _packetBufB : _packetBufA;
         }
 
         private static bool ProcessHeaderPacket(IPacket packet, Func<IPacket, bool> processAction, Action<IPacket> doneAction)
@@ -232,6 +259,10 @@ namespace NVorbis
 
             var mdct = _factory.CreateMdct();
             var huffman = _factory.CreateHuffman();
+
+            // set up both transform sizes now so the first short / long block doesn't allocate mid-stream
+            mdct.Setup(_block0Size);
+            mdct.Setup(_block1Size);
 
             // read the books
             var books = new ICodebook[packet.ReadBits(8) + 1];
@@ -497,11 +528,7 @@ namespace NVorbis
                         var mode = _modes[(int)packet.ReadBits(_modeFieldBits)];
                         if (_nextPacketBuf == null)
                         {
-                            _nextPacketBuf = new float[_channels][];
-                            for (var i = 0; i < _channels; i++)
-                            {
-                                _nextPacketBuf[i] = new float[_block1Size];
-                            }
+                            _nextPacketBuf = GetFreePacketBuffer();
                         }
                         if (mode.Decode(packet, _nextPacketBuf, out packetStartindex, out packetValidLength, out packetTotalLength))
                         {
@@ -585,13 +612,13 @@ namespace NVorbis
             if (samplePosition == 0)
             {
                 // short circuit for the looping case...
-                _packetProvider.SeekTo(0, 0, GetPacketGranules);
+                _packetProvider.SeekTo(0, 0, _getPacketGranules);
                 rollForward = 0;
             }
             else
             {
                 // seek the stream to the correct position
-                var pos = _packetProvider.SeekTo(samplePosition, 1, GetPacketGranules);
+                var pos = _packetProvider.SeekTo(samplePosition, 1, _getPacketGranules);
                 rollForward = (int)(samplePosition - pos);
             }
 

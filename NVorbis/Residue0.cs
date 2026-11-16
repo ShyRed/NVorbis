@@ -31,6 +31,10 @@ namespace NVorbis
         int[] _cascade;
         int[][] _decodeMap;
 
+        // per-packet scratch, reused so decoding doesn't allocate
+        int[,][] _partWordCache;
+        int[] _entryCache;
+
 
         virtual public void Init(IPacket packet, int channels, ICodebook[] codebooks)
         {
@@ -114,6 +118,20 @@ namespace NVorbis
             }
 
             _channels = channels;
+
+            // Decode() never handles more than (_end - _begin) values, so size the partition word cache for that now.
+            // Absurd ranges (only possible in broken streams) are left to Decode() to size from the actual block size.
+            var maxPartitionWords = GetPartitionWords(_end - _begin);
+            if (maxPartitionWords > 0 && maxPartitionWords <= 65536)
+            {
+                _partWordCache = new int[_channels, maxPartitionWords][];
+            }
+        }
+
+        int GetPartitionWords(int n)
+        {
+            var partitionCount = n / _partitionSize;
+            return (partitionCount + _classBook.Dimensions - 1) / _classBook.Dimensions;
         }
 
         virtual public void Decode(IPacket packet, bool[] doNotDecodeChannel, int blockSize, float[][] buffer)
@@ -126,8 +144,14 @@ namespace NVorbis
             {
                 var partitionCount = n / _partitionSize;
 
-                var partitionWords = (partitionCount + _classBook.Dimensions - 1) / _classBook.Dimensions;
-                var partWordCache = new int[_channels, partitionWords][];
+                var partitionWords = GetPartitionWords(n);
+
+                // entries are always written (in stage 0) before they are read, so stale values from earlier packets are never seen
+                var partWordCache = _partWordCache;
+                if (partWordCache == null || partWordCache.GetLength(1) < partitionWords)
+                {
+                    _partWordCache = partWordCache = new int[_channels, partitionWords][];
+                }
 
                 for (var stage = 0; stage < _maxStages; stage++)
                 {
@@ -181,7 +205,12 @@ namespace NVorbis
         {
             var res = residue[channel];
             var steps = partitionSize / codebook.Dimensions;
-            var entryCache = new int[steps];
+            var entryCache = _entryCache;
+            if (entryCache == null || entryCache.Length < steps)
+            {
+                // sized once per (partition size / dimensions); only residue type 0 uses it
+                _entryCache = entryCache = new int[steps];
+            }
 
             for (var i = 0; i < steps; i++)
             {
