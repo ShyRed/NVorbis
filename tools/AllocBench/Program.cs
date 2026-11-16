@@ -278,6 +278,8 @@ static class Program
     static int SeekCheck(string[] files)
     {
         var hung = false;
+        var indexFirst = files.Length > 0 && files[0] == "--index-first";
+        if (indexFirst) files = files.Skip(1).ToArray();
         foreach (var f in files)
         {
             var bytes = File.ReadAllBytes(f);
@@ -306,8 +308,23 @@ static class Program
             {
                 using var r = Open(bytes);
                 var buf = new float[256 * ch];
+                if (indexFirst) _ = r.TotalSamples; // index all pages first (avoids the fresh-open FindFirstDataPage bug)
                 var task = Task.Run(() => { r.SamplePosition = t; return r.ReadSamples(buf, 0, buf.Length); });
-                if (!task.Wait(3000))
+                try
+                {
+                    if (!task.Wait(3000))
+                    {
+                        Console.WriteLine($"  seek {t,8}: HANG (no return within 3 s)");
+                        hung = true;
+                        continue;
+                    }
+                }
+                catch (AggregateException e)
+                {
+                    Console.WriteLine($"  seek {t,8}: EXCEPTION {e.InnerException.GetType().Name}: {e.InnerException.Message}");
+                    continue;
+                }
+                if (false)
                 {
                     Console.WriteLine($"  seek {t,8}: HANG (no return within 3 s)");
                     hung = true;

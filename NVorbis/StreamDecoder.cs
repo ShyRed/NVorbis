@@ -640,7 +640,9 @@ namespace NVorbis
                 return;
             }
 
-            // read the actual packet
+            // read the actual packet; its samples start at (samplePosition - rollForward), which ReadNextPacket(...) needs
+            // as the current position to trim the stream's last packet correctly
+            _currentPosition = samplePosition - rollForward;
             if (!ReadNextPacket(0, out _))
             {
                 ResetDecoder();
@@ -649,7 +651,21 @@ namespace NVorbis
                 throw new InvalidOperationException("Could not read pre-roll packet!  Try seeking again prior to reading more samples.");
             }
 
-            // adjust our indexes to match what we want
+            // adjust our indexes to match what we want; if the target lies past this packet's samples (it shouldn't, but a
+            // miscount used to put _prevPacketStart past _prevPacketEnd, which made Read(...) loop forever), move on to the
+            // next packet(s) the same way Read(...) would
+            while (rollForward > _prevPacketEnd - _prevPacketStart)
+            {
+                rollForward -= _prevPacketEnd - _prevPacketStart;
+                _currentPosition += _prevPacketEnd - _prevPacketStart;
+                _prevPacketStart = _prevPacketEnd;
+                if (!ReadNextPacket(0, out _))
+                {
+                    ResetDecoder();
+                    _eosFound = true;
+                    throw new InvalidOperationException("Could not read pre-roll packet!  Try seeking again prior to reading more samples.");
+                }
+            }
             _prevPacketStart += rollForward;
             _currentPosition = samplePosition;
         }

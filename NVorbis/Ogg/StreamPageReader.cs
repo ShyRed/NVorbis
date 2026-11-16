@@ -149,9 +149,12 @@ namespace NVorbis.Ogg
 
         private int FindFirstDataPage()
         {
+            // read ahead until the first page with audio is found
+            // (this used to call GetPageRaw(_pageOffsets.Count), which indexes past the end of _pageOffsets and threw
+            // ArgumentOutOfRangeException when seeking before that page had been read)
             while (!_firstDataPageIndex.HasValue)
             {
-                if (!GetPageRaw(_pageOffsets.Count, out _))
+                if (!GetNextPageGranulePos(out _))
                 {
                     return -1;
                 }

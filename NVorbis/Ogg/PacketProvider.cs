@@ -159,8 +159,15 @@ namespace NVorbis.Ogg
 
         private int FindPacket(int pageIndex, long[] gps, int gpsCount, long endGP, long lastPageGranulePos, int lastPagePacketLength, ref long granulePos)
         {
+            // On the first audio page the first packet doesn't produce any samples (it only primes the overlap), but its
+            // nominal length is still counted when the granules are worked out backwards from the page's granule position.
+            // So endGP comes out at minus that length (e.g. -128 for a 256 sample short block) while gps[] is exactly right.
+            // That difference must not be "corrected": it looks like the libvorbis page boundary bug (any power of two does),
+            // and shifting gps[] by it made every seek into the first page land that many samples early.
+            var isFirstDataPage = pageIndex == _reader.FirstDataPageIndex;
+
             // next check for a bugged vorbis encoder...
-            if (endGP != lastPageGranulePos)
+            if (endGP != lastPageGranulePos && !isFirstDataPage)
             {
                 var diff = endGP - lastPageGranulePos;
                 if (GetIsVorbisBugDiff(diff))
@@ -180,15 +187,26 @@ namespace NVorbis.Ogg
                     else
                     {
                         // our pageGranulePos is wrong, so adjust everything and let the normal logic apply
+                        // (including endGP, the start of the page's first packet: leaving it made seeks into that packet off by diff)
                         for (var i = 0; i < gpsCount; i++)
                         {
                             gps[i] -= diff;
                         }
+                        endGP -= diff;
                     }
                 }
+                // the last page's granule position is clipped to the stream's real length, so counting backwards from it
+                // over-counts; the previous page's granule position is right, so align to that
+                else if (diff < 0 && _reader.HasAllPages && pageIndex == _reader.PageCount - 1)
+                {
+                    for (var i = 0; i < gpsCount; i++)
+                    {
+                        gps[i] -= diff;
+                    }
+                    endGP -= diff;
+                }
                 // if we're not on the first page, there's a problem...
-                // technically there could still be a problem on the first page, but we're ignoring it
-                else if (pageIndex > _reader.FirstDataPageIndex)
+                else
                 {
                     // unknown error...
                     throw new System.IO.InvalidDataException($"GranulePos mismatch: Page {pageIndex}, expected {lastPageGranulePos}, calculated {endGP}");
@@ -202,7 +220,8 @@ namespace NVorbis.Ogg
                 {
                     if (i == 0)
                     {
-                        granulePos = endGP;
+                        // on the first audio page, the first packet's (empty) output starts where it ends
+                        granulePos = isFirstDataPage ? gps[0] : endGP;
                     }
                     else
                     {
@@ -229,8 +248,9 @@ namespace NVorbis.Ogg
             // finally figure out which packet in our known info we need to use
             var packetIndex = FindPacket(pageIndex, gps, gpsCount, endGP, lastPageGranulePos, lastPagePacketLength, ref granulePos);
 
-            // then apply the preRoll (but only if we're not seeking into the first packet, which is its own preRoll)
-            if (endGP > 0 || packetIndex > 1)
+            // then apply the preRoll (but only if we're not seeking into the stream's first packet, which is its own preRoll:
+            // it produces no samples, so the decoder's pre-roll read of it followed by the next packet is already right)
+            if (pageIndex != _reader.FirstDataPageIndex || packetIndex > 0)
             {
                 packetIndex -= preRoll;
             }
