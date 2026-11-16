@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Measurement tool for NVorbis allocations, output identity and speed.
+    Not part of the library and not packed. See tools/AllocBench/README.md.
+    Baseline=true builds against the official NuGet NVorbis 0.10.5 binary instead of the branch source.
+  -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <IsPackable>false</IsPackable>
+    <DefaultItemExcludes>$(DefaultItemExcludes);obj/**;bin/**</DefaultItemExcludes>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <!-- The baseline build needs its own obj/bin; pass them on the command line, e.g.
+         -p:Baseline=true -p:BaseIntermediateOutputPath=obj-baseline\ -p:BaseOutputPath=bin-baseline\ -->
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(Baseline)' == 'true'">
+    <PackageReference Include="NVorbis" Version="0.10.5" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(Baseline)' != 'true'">
+    <ProjectReference Include="..\..\NVorbis\NVorbis.csproj" SetTargetFramework="TargetFramework=netstandard2.0" />
+  </ItemGroup>
+
+</Project>
