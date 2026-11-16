@@ -324,23 +324,26 @@ static class Program
                     Console.WriteLine($"  seek {t,8}: EXCEPTION {e.InnerException.GetType().Name}: {e.InnerException.Message}");
                     continue;
                 }
-                if (false)
-                {
-                    Console.WriteLine($"  seek {t,8}: HANG (no return within 3 s)");
-                    hung = true;
-                    continue;
-                }
                 var n = task.Result / ch;
                 // find the offset at which the returned frames match the reference
+                // Offset 0 first, then the nearest offsets (silence or a periodic signal can match at many offsets, and only
+                // the nearest is meaningful). Frames returned past the stream's end are reported, not compared.
                 string verdict = "NO MATCH";
-                for (var off = -2048; off <= 2048; off++)
+                for (var k = 0; k <= 4096; k++)
                 {
+                    var off = (k & 1) == 0 ? k / 2 : -(k + 1) / 2;
                     var start = t + off;
-                    if (start < 0 || start + n > total) continue;
+                    if (start < 0 || start >= total) continue;
+                    var m = (int)Math.Min(n, total - start);
                     var ok = true;
-                    for (var i = 0; i < n * ch && ok; i++)
+                    for (var i = 0; i < m * ch && ok; i++)
                         ok = MathF.Abs(buf[i] - reference[start * ch + i]) <= 1e-6f;
-                    if (ok) { verdict = off == 0 ? "exact" : $"OFF BY {off} frames"; break; }
+                    if (ok)
+                    {
+                        verdict = off == 0 ? "exact" : $"OFF BY {off} frames";
+                        if (n > m) verdict += $", PLUS {n - m} FRAMES PAST THE END";
+                        break;
+                    }
                 }
                 Console.WriteLine($"  seek {t,8}: {verdict} (reported pos after read {r.SamplePosition}, expected {t + n})");
             }
