@@ -166,6 +166,20 @@ namespace NVorbis.Ogg
             // and shifting gps[] by it made every seek into the first page land that many samples early.
             var isFirstDataPage = pageIndex == _reader.FirstDataPageIndex;
 
+            // When the first audio page is also the last (a short stream), its granule position is clipped to the stream's
+            // length, so counting backwards from it is off. Count forward instead: the decoder's timeline starts at 0 with the
+            // first packet, which returns nothing, so gps[0] (that packet's end) is 0. Other first pages keep the backward
+            // count, which is right there (and also when audio packets start on an earlier page without a granule position).
+            if (isFirstDataPage && _reader.HasAllPages && pageIndex == _reader.PageCount - 1 && gpsCount > 0 && gps[0] != 0)
+            {
+                var shift = gps[0];
+                for (var i = 0; i < gpsCount; i++)
+                {
+                    gps[i] -= shift;
+                }
+                endGP -= shift;
+            }
+
             // next check for a bugged vorbis encoder...
             if (endGP != lastPageGranulePos && !isFirstDataPage)
             {

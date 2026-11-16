@@ -9,7 +9,9 @@ namespace NVorbis.Tests
     {
         // 2test.ogg: mono, first audio page ends at granule 145984; 3test.ogg: stereo, first audio page ends at 8192.
         // Both have a last page whose granule position is clipped to the stream's length.
-        public static TheoryData<string> Files => new TheoryData<string> { "2test.ogg", "3test.ogg" };
+        // onepage_stereo.ogg: 0.5 s of two sines (ffmpeg sine + libvorbis -q:a 2) in a single page, which is both the first
+        // and the last audio page, so its granule position is clipped to the stream's length.
+        public static TheoryData<string> Files => new TheoryData<string> { "2test.ogg", "3test.ogg", "onepage_stereo.ogg" };
 
         static byte[] Load(string name) => File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "TestFiles", name));
 
@@ -74,9 +76,14 @@ namespace NVorbis.Tests
 
             using var r = Open(bytes);
             _ = r.TotalSamples;
+            var total = reference.Length / channels;
             foreach (var target in new long[] { 1, 2, 64, 127, 128, 129, 200, 256, 257, 1000, firstPageEnd - 129, firstPageEnd - 1, firstPageEnd, firstPageEnd + 1, 0 })
             {
-                AssertSeekMatches(r, reference, channels, target);
+                // (a single-page stream ends with its first page)
+                if (target < total)
+                {
+                    AssertSeekMatches(r, reference, channels, target);
+                }
             }
         }
 
