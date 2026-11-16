@@ -16,7 +16,12 @@ namespace NVorbis.Ogg
 
         private long _nextPageOffset;
         private ushort _pageSize;
-        Memory<byte>[] _packets;
+
+        // The current page lives in _pageBuf (reused for every page read), its packets are sliced into _packets[0 .. PacketCount).
+        // _hasPackets says whether _packets is valid for the page at PageOffset.
+        private readonly byte[] _pageBuf = new byte[MaxPageSize];
+        private readonly Memory<byte>[] _packets = new Memory<byte>[255];
+        private bool _hasPackets;
 
         public PageReader(Stream stream, bool closeOnDispose, Func<Contracts.IPacketProvider, bool> newStreamCallback)
             : base(stream, closeOnDispose)
@@ -63,9 +68,8 @@ namespace NVorbis.Ogg
             return (ushort)(PageOverhead + dataLen);
         }
 
-        private static Memory<byte>[] ReadPackets(int packetCount, Span<byte> segments, Memory<byte> dataBuffer)
+        private static void ReadPackets(Memory<byte>[] list, Span<byte> segments, Memory<byte> dataBuffer)
         {
-            var list = new Memory<byte>[packetCount];
             var listIdx = 0;
             var dataIdx = 0;
             var size = 0;
@@ -88,8 +92,16 @@ namespace NVorbis.Ogg
             {
                 list[listIdx] = dataBuffer.Slice(dataIdx, size);
             }
+        }
 
-            return list;
+        protected override bool ReusesPageBuffer => true;
+
+        protected override byte[] GetPageBuffer(int pageLength)
+        {
+            // the current page's data is about to be overwritten
+            _hasPackets = false;
+            PageOffset = -1;
+            return _pageBuf;
         }
 
         public override void Lock()
@@ -122,15 +134,16 @@ namespace NVorbis.Ogg
             SeekStream(_nextPageOffset);
         }
 
-        protected override bool AddPage(int streamSerial, byte[] pageBuf, bool isResync)
+        protected override bool AddPage(int streamSerial, byte[] pageBuf, int pageLength, bool isResync)
         {
-            PageOffset = StreamPosition - pageBuf.Length;
+            PageOffset = StreamPosition - pageLength;
             ParsePageHeader(pageBuf, streamSerial, isResync);
 
             // if the page doesn't have any packets, we can't use it
             if (PacketCount == 0) return false;
 
-            _packets = ReadPackets(PacketCount, new Span<byte>(pageBuf, 27, pageBuf[26]), new Memory<byte>(pageBuf, 27 + pageBuf[26], pageBuf.Length - 27 - pageBuf[26]));
+            ReadPackets(_packets, new Span<byte>(pageBuf, 27, pageBuf[26]), new Memory<byte>(pageBuf, 27 + pageBuf[26], pageLength - 27 - pageBuf[26]));
+            _hasPackets = true;
 
             if (_streamReaders.TryGetValue(streamSerial, out var spr))
             {
@@ -170,7 +183,9 @@ namespace NVorbis.Ogg
                 return true;
             }
 
-            var hdrBuf = new byte[282];
+            // the header goes into the page buffer, so the current page's packets are no longer valid
+            var hdrBuf = _pageBuf;
+            _hasPackets = false;
 
             SeekStream(offset);
             var cnt = EnsureRead(hdrBuf, 0, 27);
@@ -179,7 +194,6 @@ namespace NVorbis.Ogg
             if (VerifyHeader(hdrBuf, 0, ref cnt))
             {
                 // don't read the whole page yet; if our caller is seeking, they won't need packets anyway
-                _packets = null;
                 _pageSize = ParsePageHeader(hdrBuf, null, null);
                 return true;
             }
@@ -216,19 +230,21 @@ namespace NVorbis.Ogg
 
         public int PageOverhead { get; private set; }
 
-        public Memory<byte>[] GetPackets()
+        public Memory<byte> GetPacket(int packetIndex)
         {
             if (!CheckLock()) throw new InvalidOperationException("Must be locked!");
 
-            if (_packets == null)
+            if (!_hasPackets)
             {
-                var pageBuf = new byte[_pageSize];
+                var pageBuf = _pageBuf;
                 SeekStream(PageOffset);
                 EnsureRead(pageBuf, 0, _pageSize);
-                _packets = ReadPackets(PacketCount, new Span<byte>(pageBuf, 27, pageBuf[26]), new Memory<byte>(pageBuf, 27 + pageBuf[26], pageBuf.Length - 27 - pageBuf[26]));
+                ReadPackets(_packets, new Span<byte>(pageBuf, 27, pageBuf[26]), new Memory<byte>(pageBuf, 27 + pageBuf[26], _pageSize - 27 - pageBuf[26]));
+                _hasPackets = true;
             }
 
-            return _packets;
+            // the returned memory is only valid until the next page is read
+            return packetIndex < PacketCount ? _packets[packetIndex] : Memory<byte>.Empty;
         }
 
         #endregion

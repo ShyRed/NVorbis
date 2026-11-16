@@ -108,7 +108,8 @@ namespace NVorbis
         /// </summary>
         abstract protected int TotalBits { get; }
 
-        bool GetFlag(PacketFlags flag) => _packetFlags.HasFlag(flag);
+        // Enum.HasFlag boxes on some runtimes / JIT tiers; use plain bit math on the hot path.
+        bool GetFlag(PacketFlags flag) => (_packetFlags & flag) == flag;
 
         void SetFlag(PacketFlags flag, bool value)
         {
@@ -134,6 +135,20 @@ namespace NVorbis
         virtual public void Done()
         {
             // no-op for base
+        }
+
+        /// <summary>
+        /// Clears all per-packet state (read position, flags, granule position and overhead) so an instance can be reused for another packet.
+        /// </summary>
+        private protected void ClearPacketState()
+        {
+            _bitBucket = 0;
+            _bitCount = 0;
+            _overflowBits = 0;
+            _readBits = 0;
+            _packetFlags = 0;
+            GranulePosition = null;
+            ContainerOverheadBits = 0;
         }
 
         /// <summary>

@@ -30,12 +30,30 @@ namespace NVorbis.Ogg
 
         public long WasteBits { get; private set; }
 
-        private bool VerifyPage(byte[] headerBuf, int index, int cnt, out byte[] pageBuf, out int bytesRead)
+        /// <summary>
+        /// The largest possible Ogg page: 27 byte header, 255 segment table entries and 255 segments of 255 bytes.
+        /// </summary>
+        internal const int MaxPageSize = 27 + 255 + 255 * 255;
+
+        /// <summary>
+        /// Returns the buffer a page of <paramref name="pageLength"/> bytes is read into by <see cref="ReadNextPage"/>.
+        /// The default returns a new, exactly sized array.  Inheritors that don't keep pages around may return a reused buffer
+        /// (at least <paramref name="pageLength"/> bytes long); its previous contents are overwritten.
+        /// </summary>
+        virtual protected byte[] GetPageBuffer(int pageLength) => new byte[pageLength];
+
+        /// <summary>
+        /// Whether <see cref="GetPageBuffer(int)"/> returns a reused buffer.
+        /// </summary>
+        virtual protected bool ReusesPageBuffer => false;
+
+        private bool VerifyPage(byte[] headerBuf, int index, int cnt, out byte[] pageBuf, out int pageLength, out int bytesRead)
         {
             var segCnt = headerBuf[index + 26];
             if (cnt - index < index + 27 + segCnt)
             {
                 pageBuf = null;
+                pageLength = 0;
                 bytesRead = 0;
                 return false;
             }
@@ -47,11 +65,12 @@ namespace NVorbis.Ogg
                 dataLen += headerBuf[index + i + 27];
             }
 
-            pageBuf = new byte[dataLen + segCnt + 27];
+            pageLength = dataLen + segCnt + 27;
+            pageBuf = GetPageBuffer(pageLength);
             Buffer.BlockCopy(headerBuf, index, pageBuf, 0, segCnt + 27);
             bytesRead = EnsureRead(pageBuf, segCnt + 27, dataLen);
             if (bytesRead != dataLen) return false;
-            dataLen = pageBuf.Length;
+            dataLen = pageLength;
 
             _crc.Reset();
             for (i = 0; i < 22; i++)
@@ -69,14 +88,16 @@ namespace NVorbis.Ogg
             return _crc.Test(BitConverter.ToUInt32(pageBuf, 22));
         }
 
-        private bool AddPage(byte[] pageBuf, bool isResync)
+        private bool AddPage(byte[] pageBuf, int pageLength, bool isResync)
         {
             var streamSerial = BitConverter.ToInt32(pageBuf, 14);
             if (!_ignoredSerials.Contains(streamSerial))
             {
-                if (AddPage(streamSerial, pageBuf, isResync))
+                // read before AddPage(...): a new-stream callback may read further pages into a reused page buffer
+                var segCnt = pageBuf[26];
+                if (AddPage(streamSerial, pageBuf, pageLength, isResync))
                 {
-                    ContainerBits += 8 * (27 + pageBuf[26]);
+                    ContainerBits += 8 * (27 + segCnt);
                     return true;
                 }
                 _ignoredSerials.Add(streamSerial);
@@ -214,7 +235,7 @@ namespace NVorbis.Ogg
 
         virtual protected void SaveNextPageSearch() { }
 
-        abstract protected bool AddPage(int streamSerial, byte[] pageBuf, bool isResync);
+        abstract protected bool AddPage(int streamSerial, byte[] pageBuf, int pageLength, bool isResync);
 
         abstract protected void SetEndOfStreams();
 
@@ -241,7 +262,7 @@ namespace NVorbis.Ogg
                 {
                     if (VerifyHeader(_headerBuf, i, ref cnt, true))
                     {
-                        if (VerifyPage(_headerBuf, i, cnt, out var pageBuf, out var bytesRead))
+                        if (VerifyPage(_headerBuf, i, cnt, out var pageBuf, out var pageLength, out var bytesRead))
                         {
                             // one way or the other, we have to clear out the page's bytes from the queue (if queued)
                             ClearEnqueuedData(bytesRead);
@@ -250,7 +271,7 @@ namespace NVorbis.Ogg
                             SaveNextPageSearch();
 
                             // pass it to our inheritor
-                            if (AddPage(pageBuf, isResync))
+                            if (AddPage(pageBuf, pageLength, isResync))
                             {
                                 return true;
                             }
@@ -258,7 +279,7 @@ namespace NVorbis.Ogg
                             // otherwise, the whole page is useless...
 
                             // save off that we've burned that many bits
-                            WasteBits += pageBuf.Length * 8;
+                            WasteBits += pageLength * 8;
 
                             // set up to load the next page, then loop
                             ofs = 0;
@@ -267,6 +288,13 @@ namespace NVorbis.Ogg
                         }
                         else if (pageBuf != null)
                         {
+                            // (error path) the page buffer may be reused, so queue a copy of the trailing bytes
+                            if (ReusesPageBuffer)
+                            {
+                                var copy = new byte[bytesRead];
+                                Buffer.BlockCopy(pageBuf, pageLength - bytesRead, copy, 0, bytesRead);
+                                pageBuf = copy;
+                            }
                             EnqueueData(pageBuf, bytesRead);
                         }
                     }

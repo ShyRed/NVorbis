@@ -23,8 +23,6 @@ namespace NVorbis.Ogg
         private int _lastPagePacketCount;
         private int _lastPageOverhead;
 
-        private Memory<byte>[] _cachedPagePackets;
-
         public Contracts.IPacketProvider PacketProvider { get; private set; }
 
         public StreamPageReader(IPageData pageReader, int streamSerial)
@@ -89,13 +87,10 @@ namespace NVorbis.Ogg
             }
         }
 
-        public Memory<byte>[] GetPagePackets(int pageIndex)
+        public Memory<byte> GetPagePacket(int pageIndex, int packetIndex)
         {
-            if (_cachedPagePackets != null && _lastPageIndex == pageIndex)
-            {
-                return _cachedPagePackets;
-            }
-
+            // No packet cache here: the page reader reuses its page buffer, so cached slices would go stale as soon as
+            // another page is read.  The page reader itself short-circuits re-reading the page it already holds.
             var pageOffset = _pageOffsets[pageIndex];
             if (pageOffset < 0)
             {
@@ -106,12 +101,7 @@ namespace NVorbis.Ogg
             try
             {
                 _reader.ReadPageAt(pageOffset);
-                var packets = _reader.GetPackets();
-                if (pageIndex == _lastPageIndex)
-                {
-                    _cachedPagePackets = packets;
-                }
-                return packets;
+                return _reader.GetPacket(packetIndex);
             }
             finally
             {
@@ -368,7 +358,6 @@ namespace NVorbis.Ogg
 
         private void ReadPageData(int pageIndex, out long granulePos, out bool isContinuation, out bool isContinued, out int packetCount, out int pageOverhead)
         {
-            _cachedPagePackets = null;
             _lastPageGranulePos = granulePos = _reader.GranulePosition;
             _lastPageIsContinuation = isContinuation = (_reader.PageFlags & PageFlags.ContinuesPacket) != 0;
             _lastPageIsContinued = isContinued = _reader.IsContinued;

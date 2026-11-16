@@ -18,7 +18,7 @@ namespace NVorbis.Ogg
             _newStreamCallback = newStreamCallback;
         }
 
-        protected override bool AddPage(int streamSerial, byte[] pageBuf, bool isResync)
+        protected override bool AddPage(int streamSerial, byte[] pageBuf, int pageLength, bool isResync)
         {
             if (_packetProviders.TryGetValue(streamSerial, out var pp))
             {

@@ -8,7 +8,11 @@ namespace NVorbis.Contracts.Ogg
 
         void AddPage();
 
-        Memory<byte>[] GetPagePackets(int pageIndex);
+        /// <summary>
+        /// Gets the data of a packet in the specified page, or <see cref="Memory{T}.Empty"/> if the page has no such packet.
+        /// The returned memory is only valid until the next page is read.
+        /// </summary>
+        Memory<byte> GetPagePacket(int pageIndex, int packetIndex);
 
         int FindPage(long granulePos);
 

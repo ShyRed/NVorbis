@@ -18,6 +18,14 @@ namespace NVorbis.Ogg
         private int _nextPacketPageIndex;
         private int _nextPacketPacketIndex;
 
+        // Packet instances are reused so reading doesn't allocate: _packet backs GetNextPacket() / PeekNextPacket(),
+        // _seekPacket backs the packets inspected while seeking.  A returned packet is valid until the next one is created.
+        private readonly Packet _packet;
+        private readonly Packet _seekPacket;
+
+        // granule positions of the packets in the seek target page (a page has at most 255 packets)
+        private readonly long[] _seekGranules = new long[255];
+
         public bool CanSeek => true;
 
         public int StreamSerial { get; }
@@ -27,6 +35,9 @@ namespace NVorbis.Ogg
             _reader = reader ?? throw new ArgumentNullException(nameof(reader));
 
             StreamSerial = streamSerial;
+
+            _packet = new Packet(this);
+            _seekPacket = new Packet(this);
         }
 
         public long GetGranuleCount()
@@ -105,7 +116,7 @@ namespace NVorbis.Ogg
             }
         }
 
-        private (long[] gps, long endGP) GetTargetPageInfo(int pageIndex, int firstRealPacket, int lastPagePacketLength, GetPacketGranuleCount getPacketGranuleCount)
+        private (long[] gps, int gpsCount, long endGP) GetTargetPageInfo(int pageIndex, int firstRealPacket, int lastPagePacketLength, GetPacketGranuleCount getPacketGranuleCount)
         {
             if (!_reader.GetPage(pageIndex, out var pageGranulePos, out var isResync, out var isContinuation, out var isContinued, out var packetCount, out _))
             {
@@ -119,7 +130,8 @@ namespace NVorbis.Ogg
             }
 
             // get the granule positions of all packets in the page
-            var gps = new long[packetCount];
+            // (every entry in [0, packetCount) is written below, so the reused array needs no clearing)
+            var gps = _seekGranules;
             var endGP = pageGranulePos;
             for (var i = packetCount - 1; i >= firstRealPacket; i--)
             {
@@ -142,10 +154,10 @@ namespace NVorbis.Ogg
                 endGP -= lastPagePacketLength;
             }
 
-            return (gps, endGP);
+            return (gps, packetCount, endGP);
         }
 
-        private int FindPacket(int pageIndex, long[] gps, long endGP, long lastPageGranulePos, int lastPagePacketLength, ref long granulePos)
+        private int FindPacket(int pageIndex, long[] gps, int gpsCount, long endGP, long lastPageGranulePos, int lastPagePacketLength, ref long granulePos)
         {
             // next check for a bugged vorbis encoder...
             if (endGP != lastPageGranulePos)
@@ -168,7 +180,7 @@ namespace NVorbis.Ogg
                     else
                     {
                         // our pageGranulePos is wrong, so adjust everything and let the normal logic apply
-                        for (var i = 0; i < gps.Length; i++)
+                        for (var i = 0; i < gpsCount; i++)
                         {
                             gps[i] -= diff;
                         }
@@ -184,7 +196,7 @@ namespace NVorbis.Ogg
             }
 
             // finally, find the packet with the requested granulePos
-            for (var i = 0; i < gps.Length; i++)
+            for (var i = 0; i < gpsCount; i++)
             {
                 if (gps[i] >= granulePos)
                 {
@@ -212,10 +224,10 @@ namespace NVorbis.Ogg
             var (lastPageGranulePos, lastPagePacketLength, firstRealPacket) = GetPreviousPageInfo(pageIndex, getPacketGranuleCount);
 
             // now get the info on the target page
-            var (gps, endGP) = GetTargetPageInfo(pageIndex, firstRealPacket, lastPagePacketLength, getPacketGranuleCount);
+            var (gps, gpsCount, endGP) = GetTargetPageInfo(pageIndex, firstRealPacket, lastPagePacketLength, getPacketGranuleCount);
 
             // finally figure out which packet in our known info we need to use
-            var packetIndex = FindPacket(pageIndex, gps, endGP, lastPageGranulePos, lastPagePacketLength, ref granulePos);
+            var packetIndex = FindPacket(pageIndex, gps, gpsCount, endGP, lastPageGranulePos, lastPagePacketLength, ref granulePos);
 
             // then apply the preRoll (but only if we're not seeking into the first packet, which is its own preRoll)
             if (endGP > 0 || packetIndex > 1)
@@ -323,11 +335,19 @@ namespace NVorbis.Ogg
 
         private Packet CreatePacket(ref int pageIndex, ref int packetIndex, bool advance, long granulePos, bool isResync, bool isContinued, int packetCount, int pageOverhead)
         {
-            // save off the packet data for the initial packet
-            var firstPacketData = _reader.GetPagePackets(pageIndex)[packetIndex];
+            // reuse the packet instance (the advancing one for reads, the other one for seek lookups);
+            // its data is fetched lazily when read, after the page reader is done looking at continuation pages
+            var packet = advance ? _packet : _seekPacket;
+            if (advance)
+            {
+                // the cached "last packet" is the instance being rebuilt
+                _lastPacket = null;
+            }
+            packet.Init(isResync);
 
             // create the packet list and add the item to it
-            var pktList = new List<int>(2) { (pageIndex << 8) | packetIndex };
+            var pktList = packet.DataParts;
+            pktList.Add((pageIndex << 8) | packetIndex);
 
             // make sure we handle continuations
             bool isLastPacket;
@@ -383,11 +403,8 @@ namespace NVorbis.Ogg
                 isLastPacket = packetIndex == packetCount - 1;
             }
 
-            // create the packet instance and populate it with the appropriate initial data
-            var packet = new Packet(pktList, this, firstPacketData)
-            {
-                IsResync = isResync,
-            };
+            // the continuation pages may have changed the resync state
+            packet.IsResync = isResync;
 
             // if it's the first packet, associate the container overhead with it
             if (isFirstPacket)
@@ -442,12 +459,7 @@ namespace NVorbis.Ogg
             var pageIndex = (pagePacketIndex >> 8) & 0xFFFFFF;
             var packetIndex = pagePacketIndex & 0xFF;
 
-            var packets = _reader.GetPagePackets(pageIndex);
-            if (packetIndex < packets.Length)
-            {
-                return packets[packetIndex];
-            }
-            return Memory<byte>.Empty;
+            return _reader.GetPagePacket(pageIndex, packetIndex);
         }
 
         void IPacketReader.InvalidatePacketCache(IPacket packet)
